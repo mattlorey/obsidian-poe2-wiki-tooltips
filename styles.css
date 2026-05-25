@@ -71,6 +71,27 @@
   letter-spacing: 0.03em;
 }
 
+.poe2db-gem-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.poe2db-tier {
+  color: #af8c3e;
+  font-weight: 600;
+}
+
+.poe2db-req-level {
+  color: var(--text-muted);
+}
+
+.poe2db-attr-str { color: #c17f4a; }
+.poe2db-attr-int { color: #6a9fd8; }
+.poe2db-attr-dex { color: #5ca86a; }
+
 .poe2db-desc {
   color: #b8a888;
   margin-bottom: 10px;
