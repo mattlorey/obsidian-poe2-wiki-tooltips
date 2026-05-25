@@ -293,13 +293,64 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
 
   private async injectLinkIcon(link: HTMLAnchorElement) {
     const data = await this.getGemData(link.href);
-    if (!data?.iconUrl) return;
-    if (link.querySelector('.poe2db-link-icon')) return;
-    const img = createEl('img', {
-      cls: 'poe2db-link-icon',
-      attr: { src: data.iconUrl },
+    if (!data) return;
+    if (!link.querySelector('.poe2db-link-icon') && data.iconUrl) {
+      const img = createEl('img', {
+        cls: 'poe2db-link-icon',
+        attr: { src: data.iconUrl },
+      });
+      link.prepend(img);
+    }
+    this.applyLinkTheme(link, data);
+  }
+
+  private applyLinkTheme(link: HTMLAnchorElement, data: GemData) {
+    link.classList.remove('poe2-link--str', 'poe2-link--int', 'poe2-link--dex');
+    // Unwrap any previously injected split spans back to a plain text node
+    link.querySelectorAll('.poe2-link-split').forEach(span => {
+      span.replaceWith(document.createTextNode(span.textContent ?? ''));
     });
-    link.prepend(img);
+
+    const { str, int: intel, dex } = data.attributes;
+    const hasStr = !!(str && str.max > 0);
+    const hasInt = !!(intel && intel.max > 0);
+    const hasDex = !!(dex && dex.max > 0);
+    const attrCount = (hasStr ? 1 : 0) + (hasInt ? 1 : 0) + (hasDex ? 1 : 0);
+    if (attrCount === 0) return;
+
+    if (attrCount === 1) {
+      if (hasStr) link.classList.add('poe2-link--str');
+      else if (hasInt) link.classList.add('poe2-link--int');
+      else link.classList.add('poe2-link--dex');
+      return;
+    }
+
+    const colors: string[] = [];
+    if (hasStr) colors.push('#c17f4a');
+    if (hasInt) colors.push('#6a9fd8');
+    if (hasDex) colors.push('#5ca86a');
+    this.splitLinkColors(link, colors);
+  }
+
+  private splitLinkColors(link: HTMLAnchorElement, colors: string[]) {
+    const textNode = Array.from(link.childNodes).find(
+      (n): n is Text => n.nodeType === Node.TEXT_NODE && (n.textContent?.trim().length ?? 0) > 0
+    );
+    if (!textNode) return;
+    const text = textNode.textContent ?? '';
+    const total = text.length;
+    const n = colors.length;
+    const fragments: Node[] = [];
+    for (let i = 0; i < n; i++) {
+      const start = Math.round((i / n) * total);
+      const end = Math.round(((i + 1) / n) * total);
+      const span = document.createElement('span');
+      span.className = 'poe2-link-split';
+      span.style.color = colors[i];
+      span.textContent = text.slice(start, end);
+      fragments.push(span);
+    }
+    textNode.replaceWith(...fragments);
   }
 
   // --- Hover ---

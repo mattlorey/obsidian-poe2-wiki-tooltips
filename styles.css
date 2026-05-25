@@ -176,3 +176,13 @@
   font-size: 13px;
   line-height: 1.4;
 }
+
+/* Remove underline from poe2wiki links */
+a[href*="poe2wiki.net"] {
+  text-decoration: none;
+}
+
+/* Link color theming by gem attribute type */
+a.poe2-link--str { color: #c17f4a !important; }
+a.poe2-link--int { color: #6a9fd8 !important; }
+a.poe2-link--dex { color: #5ca86a !important; }
