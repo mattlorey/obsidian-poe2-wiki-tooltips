@@ -442,11 +442,22 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
     const rect = anchor.getBoundingClientRect();
     const tooltipWidth = 400;
     const gap = 8;
+
+    // Temporarily show display: 'block' to measure the exact rendered height in the DOM
+    this.tooltip.style.display = 'block';
+    const tooltipHeight = this.tooltip.offsetHeight;
+
     let left = rect.left;
     let top = rect.bottom + gap;
-    if (left + tooltipWidth > window.innerWidth - gap) left = window.innerWidth - tooltipWidth - gap;
-    const estimatedHeight = 260;
-    if (top + estimatedHeight > window.innerHeight) top = rect.top - estimatedHeight - gap;
+
+    if (left + tooltipWidth > window.innerWidth - gap) {
+      left = window.innerWidth - tooltipWidth - gap;
+    }
+
+    if (top + tooltipHeight > window.innerHeight) {
+      top = rect.top - tooltipHeight - gap;
+    }
+
     this.tooltip.style.left = `${Math.max(gap, left)}px`;
     this.tooltip.style.top = `${Math.max(gap, top)}px`;
   }
