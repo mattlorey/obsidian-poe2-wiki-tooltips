@@ -70,6 +70,16 @@ const BROWSER_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, l
 // Increment when GemData shape changes — clears stale cache automatically
 const CACHE_VERSION = 2;
 
+const ROMAN = ['I', 'II', 'III', 'IV', 'V'];
+const ROMAN_RE = /^(.+?)\s+(I{1,3}|IV|V)$/;
+
+function getAllTierUrls(name: string): { roman: string; url: string }[] {
+  const m = name.match(ROMAN_RE);
+  if (!m) return [];
+  const base = m[1].replace(/ /g, '_');
+  return ROMAN.map(r => ({ roman: r, url: `${WIKI_BASE}/wiki/${base}_${r}` }));
+}
+
 // Session-level memory cache; populated from disk on load
 const gemCache = new Map<string, GemData | null>();
 
@@ -78,6 +88,7 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
   private tooltip: HTMLElement;
   private hoverTimer: number | null = null;
   private hideTimer: number | null = null;
+  private currentAnchor: HTMLAnchorElement | null = null;
   private inflight = new Map<string, Promise<GemData | null>>();
   private prefetchQueue: PrefetchItem[] = [];
   private queueRunning = false;
@@ -90,10 +101,22 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
     this.tooltip = document.body.createDiv({ cls: 'poe2db-tooltip' });
     this.tooltip.style.display = 'none';
 
+    this.tooltip.addEventListener('mouseenter', () => {
+      if (this.hideTimer !== null) {
+        clearTimeout(this.hideTimer);
+        this.hideTimer = null;
+      }
+    });
+    this.tooltip.addEventListener('mouseleave', (evt) => {
+      if ((evt as MouseEvent).relatedTarget !== this.currentAnchor) {
+        this.hideTimer = window.setTimeout(() => this.hideTooltip(), 100);
+      }
+    });
+
     this.registerMarkdownPostProcessor((el) => {
       el.querySelectorAll<HTMLAnchorElement>(`a[href*="${WIKI_HOST}"]`).forEach(link => {
         link.addEventListener('mouseenter', (evt) => this.onLinkEnter(evt, link));
-        link.addEventListener('mouseleave', () => this.onLinkLeave());
+        link.addEventListener('mouseleave', (evt) => this.onLinkLeave(evt));
         this.enqueuePrefetch(link);
       });
     });
@@ -187,6 +210,7 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
         const data = parseWikiPage(r.text);
         gemCache.set(url, data);
         this.savePluginData();
+        if (data) this.prefetchSiblingTiers(data.name, url);
         return data;
       })
       .catch(e => {
@@ -198,6 +222,14 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
 
     this.inflight.set(url, promise);
     return promise;
+  }
+
+  private prefetchSiblingTiers(name: string, currentUrl: string) {
+    for (const { url } of getAllTierUrls(name)) {
+      if (url !== currentUrl && !gemCache.has(url) && !this.inflight.has(url)) {
+        this.getGemData(url);
+      }
+    }
   }
 
   // --- Icon injection ---
@@ -216,6 +248,7 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
   // --- Hover ---
 
   private onLinkEnter(evt: MouseEvent, link: HTMLAnchorElement) {
+    this.currentAnchor = link;
     if (this.hideTimer !== null) {
       clearTimeout(this.hideTimer);
       this.hideTimer = null;
@@ -236,11 +269,13 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
     }, 250);
   }
 
-  private onLinkLeave() {
+  private onLinkLeave(evt: MouseEvent) {
     if (this.hoverTimer !== null) {
       clearTimeout(this.hoverTimer);
       this.hoverTimer = null;
     }
+    if ((evt.relatedTarget as Node | null) === this.tooltip ||
+        this.tooltip.contains(evt.relatedTarget as Node | null)) return;
     this.hideTimer = window.setTimeout(() => this.hideTooltip(), 100);
   }
 
@@ -259,14 +294,32 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
   private renderTooltip(data: GemData, anchor: HTMLAnchorElement) {
     this.tooltip.empty();
 
-    // Header: icon + name
+    // Header: icon + name + tier switcher
     const header = this.tooltip.createDiv({ cls: 'poe2db-header' });
     if (data.iconUrl) {
-      const img = header.createEl('img', { cls: 'poe2db-icon', attr: { src: data.iconUrl } });
-      img.width = 36;
-      img.height = 36;
+      header.createEl('img', { cls: 'poe2db-icon', attr: { src: data.iconUrl, width: '18', height: '18' } });
     }
-    header.createDiv({ text: data.name, cls: 'poe2db-name' });
+    header.createSpan({ text: data.name, cls: 'poe2db-name' });
+
+    const tiers = getAllTierUrls(data.name);
+    if (tiers.length > 0) {
+      const switcher = header.createDiv({ cls: 'poe2db-tier-switcher' });
+      for (const { roman, url } of tiers) {
+        const cached = gemCache.get(url);
+        if (cached === undefined) continue; // not fetched yet — skip
+        const isActive = url === anchor.href;
+        const btn = switcher.createEl('button', {
+          text: roman,
+          cls: ['poe2db-tier-btn', ...(isActive ? ['poe2db-tier-btn--active'] : [])],
+        });
+        if (!isActive && cached !== null) {
+          btn.addEventListener('click', () => {
+            this.currentAnchor = anchor;
+            this.renderTooltip(cached, anchor);
+          });
+        }
+      }
+    }
 
     // Tags
     if (data.tags.length > 0) {

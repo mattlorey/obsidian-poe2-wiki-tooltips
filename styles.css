@@ -35,7 +35,7 @@
   border-radius: 4px;
   padding: 12px 14px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.75);
-  pointer-events: none;
+  pointer-events: auto;
   font-size: 13px;
   line-height: 1.45;
   color: #c8b89a;
@@ -46,12 +46,50 @@
   font-style: italic;
 }
 
+.poe2db-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
 .poe2db-name {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 700;
   color: #af8c3e;
-  margin-bottom: 6px;
   letter-spacing: 0.02em;
+  flex: 1;
+}
+
+.poe2db-tier-switcher {
+  display: flex;
+  gap: 3px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.poe2db-tier-btn {
+  background: rgba(139, 105, 20, 0.18);
+  border: 1px solid rgba(139, 105, 20, 0.5);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 11px;
+  color: #c9a84c;
+  cursor: pointer;
+  line-height: 1.6;
+  box-shadow: none;
+}
+
+.poe2db-tier-btn:hover:not(.poe2db-tier-btn--active) {
+  background: rgba(139, 105, 20, 0.35);
+  border-color: rgba(139, 105, 20, 0.8);
+}
+
+.poe2db-tier-btn--active {
+  background: rgba(139, 105, 20, 0.45);
+  border-color: #af8c3e;
+  color: #f0d060;
+  cursor: default;
 }
 
 .poe2db-tags {
