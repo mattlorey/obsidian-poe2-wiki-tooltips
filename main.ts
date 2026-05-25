@@ -441,7 +441,8 @@ function parseProgressionTable(doc: Document): {
     headers.push(title.toLowerCase());
   });
 
-  const rows = Array.from(table.querySelectorAll('tbody tr'));
+  // Filter to data rows only (exclude header rows that use <th> instead of <td>)
+  const rows = Array.from(table.querySelectorAll('tbody tr')).filter(r => r.querySelector('td'));
   if (rows.length === 0) return { requiresLevel: 0, attributes: {} };
 
   const getCells = (row: Element) =>
@@ -451,7 +452,7 @@ function parseProgressionTable(doc: Document): {
   const lastRow = getCells(rows[rows.length - 1]);
 
   const colIdx = (term: string) => headers.findIndex(h => h.includes(term));
-  const num = (val: string) => parseInt(val.replace(/[^\d]/g, '')) || 0;
+  const num = (val: string | undefined) => parseInt((val ?? '').replace(/[^\d]/g, '')) || 0;
 
   const attrRange = (idx: number): AttrRange | undefined => {
     if (idx < 0) return undefined;
