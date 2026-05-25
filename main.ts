@@ -33,6 +33,7 @@ interface PluginSettings {
   showInlineIcon: boolean;
   inlineIconSize: number;
   hideExternalLinkIcon: boolean;
+  preventLinkWrap: boolean;
 }
 
 interface PluginData {
@@ -42,10 +43,11 @@ interface PluginData {
 
 const DEFAULT_SETTINGS: PluginSettings = {
   cacheTtlDays: 7,
-  prefetchDelayMs: 150,
+  prefetchDelayMs: 250,
   showInlineIcon: true,
   inlineIconSize: 20,
   hideExternalLinkIcon: false,
+  preventLinkWrap: false,
 };
 
 const WIKI_HOST = 'poe2wiki.net';
@@ -83,13 +85,17 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
 
   onunload() {
     this.tooltip.remove();
+    document.body.classList.remove('poe2-icons-hidden');
     document.body.classList.remove('poe2-hide-external-icon');
+    document.body.classList.remove('poe2-nowrap');
     document.body.style.removeProperty('--poe2-icon-size');
   }
 
   applyVisualSettings() {
     document.body.style.setProperty('--poe2-icon-size', `${this.settings.inlineIconSize}px`);
+    document.body.classList.toggle('poe2-icons-hidden', !this.settings.showInlineIcon);
     document.body.classList.toggle('poe2-hide-external-icon', this.settings.hideExternalLinkIcon);
+    document.body.classList.toggle('poe2-nowrap', this.settings.preventLinkWrap);
   }
 
   // --- Data persistence ---
@@ -179,7 +185,6 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
   // --- Icon injection ---
 
   private async injectLinkIcon(link: HTMLAnchorElement) {
-    if (!this.settings.showInlineIcon) return;
     const data = await this.getGemData(link.href);
     if (!data?.iconUrl) return;
     if (link.querySelector('.poe2db-link-icon')) return;
@@ -323,6 +328,7 @@ class Poe2WikiSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.showInlineIcon)
         .onChange(async (value) => {
           this.plugin.settings.showInlineIcon = value;
+          this.plugin.applyVisualSettings();
           await this.plugin.savePluginData();
         }));
 
@@ -335,6 +341,17 @@ class Poe2WikiSettingTab extends PluginSettingTab {
         .setDynamicTooltip()
         .onChange(async (value) => {
           this.plugin.settings.inlineIconSize = value;
+          this.plugin.applyVisualSettings();
+          await this.plugin.savePluginData();
+        }));
+
+    new Setting(containerEl)
+      .setName('Keep icon and text on same line')
+      .setDesc('Prevent the gem icon from wrapping to a different line than the link text.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.preventLinkWrap)
+        .onChange(async (value) => {
+          this.plugin.settings.preventLinkWrap = value;
           this.plugin.applyVisualSettings();
           await this.plugin.savePluginData();
         }));
