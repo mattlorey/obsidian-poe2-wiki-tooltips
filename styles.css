@@ -1,11 +1,29 @@
+.poe2-nowrap a:has(.poe2db-link-icon) {
+  white-space: nowrap;
+}
+
 .poe2db-link-icon {
   display: inline-block;
-  width: 20px;
-  height: 20px;
+  width: var(--poe2-icon-size, 20px);
+  height: var(--poe2-icon-size, 20px);
   vertical-align: middle;
   margin-right: 3px;
   position: relative;
   top: -1px;
+}
+
+/* Applied to body when "show inline icon" is disabled — hides already-injected icons instantly */
+.poe2-icons-hidden .poe2db-link-icon {
+  display: none;
+}
+
+/* Applied to body when "hide external link indicator" is enabled */
+.poe2-hide-external-icon .external-link[href*="poe2wiki.net"]::after {
+  display: none !important;
+}
+.poe2-hide-external-icon .external-link[href*="poe2wiki.net"] {
+  background-image: none !important;
+  padding-right: 0 !important;
 }
 
 .poe2db-tooltip {

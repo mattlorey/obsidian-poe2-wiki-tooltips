@@ -49,4 +49,4 @@ Use [Entangle](https://www.poe2wiki.net/wiki/Entangle) with
 [Unleash](https://www.poe2wiki.net/wiki/Unleash) support.
 ```
 
-Tooltips only appear in **Reading mode**.
+Tooltips work in **Reading mode** and in **Live Preview** for links inside tables. Inline paragraph links in Live Preview are not supported (Obsidian renders those through CodeMirror rather than the markdown post-processor).
