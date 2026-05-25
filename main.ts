@@ -30,6 +30,9 @@ interface PrefetchItem {
 interface PluginSettings {
   cacheTtlDays: number;
   prefetchDelayMs: number;
+  showInlineIcon: boolean;
+  inlineIconSize: number;
+  hideExternalLinkIcon: boolean;
 }
 
 interface PluginData {
@@ -40,6 +43,9 @@ interface PluginData {
 const DEFAULT_SETTINGS: PluginSettings = {
   cacheTtlDays: 7,
   prefetchDelayMs: 150,
+  showInlineIcon: true,
+  inlineIconSize: 20,
+  hideExternalLinkIcon: false,
 };
 
 const WIKI_HOST = 'poe2wiki.net';
@@ -60,6 +66,7 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
 
   async onload() {
     await this.loadPluginData();
+    this.applyVisualSettings();
     this.addSettingTab(new Poe2WikiSettingTab(this.app, this));
 
     this.tooltip = document.body.createDiv({ cls: 'poe2db-tooltip' });
@@ -76,6 +83,13 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
 
   onunload() {
     this.tooltip.remove();
+    document.body.classList.remove('poe2-hide-external-icon');
+    document.body.style.removeProperty('--poe2-icon-size');
+  }
+
+  applyVisualSettings() {
+    document.body.style.setProperty('--poe2-icon-size', `${this.settings.inlineIconSize}px`);
+    document.body.classList.toggle('poe2-hide-external-icon', this.settings.hideExternalLinkIcon);
   }
 
   // --- Data persistence ---
@@ -165,6 +179,7 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
   // --- Icon injection ---
 
   private async injectLinkIcon(link: HTMLAnchorElement) {
+    if (!this.settings.showInlineIcon) return;
     const data = await this.getGemData(link.href);
     if (!data?.iconUrl) return;
     if (link.querySelector('.poe2db-link-icon')) return;
@@ -298,6 +313,40 @@ class Poe2WikiSettingTab extends PluginSettingTab {
         .setDynamicTooltip()
         .onChange(async (value) => {
           this.plugin.settings.prefetchDelayMs = value;
+          await this.plugin.savePluginData();
+        }));
+
+    new Setting(containerEl)
+      .setName('Show inline icon')
+      .setDesc('Display the gem icon next to each poe2wiki.net link in your notes.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.showInlineIcon)
+        .onChange(async (value) => {
+          this.plugin.settings.showInlineIcon = value;
+          await this.plugin.savePluginData();
+        }));
+
+    new Setting(containerEl)
+      .setName('Inline icon size')
+      .setDesc('Size of the gem icon displayed next to links, in pixels.')
+      .addSlider(slider => slider
+        .setLimits(12, 40, 2)
+        .setValue(this.plugin.settings.inlineIconSize)
+        .setDynamicTooltip()
+        .onChange(async (value) => {
+          this.plugin.settings.inlineIconSize = value;
+          this.plugin.applyVisualSettings();
+          await this.plugin.savePluginData();
+        }));
+
+    new Setting(containerEl)
+      .setName('Hide external link indicator')
+      .setDesc('Remove the arrow icon Obsidian appends to external links on poe2wiki.net URLs.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.hideExternalLinkIcon)
+        .onChange(async (value) => {
+          this.plugin.settings.hideExternalLinkIcon = value;
+          this.plugin.applyVisualSettings();
           await this.plugin.savePluginData();
         }));
 
