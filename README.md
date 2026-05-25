@@ -8,7 +8,7 @@ An [Obsidian](https://obsidian.md) plugin that shows hover tooltips for [poe2wik
 - Gem icons are injected inline next to each link
 - Data is fetched and cached on note load, so tooltips appear instantly after the first visit
 
-![Tooltip example showing Entangle gem with icon, tags, description, and stats]()
+![Tooltip showing the Entangle gem with icon, tags, description, and stats](screenshot.png)
 
 ## Installation
 
