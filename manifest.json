@@ -1,0 +1,9 @@
+{
+  "id": "poe2-wiki-tooltips",
+  "name": "Path of Exile 2 Wiki Tooltips",
+  "version": "1.0.0",
+  "minAppVersion": "1.4.0",
+  "description": "Shows hover tooltips for poe2wiki.net links, displaying gem and skill info inline.",
+  "author": "mattlorey",
+  "isDesktopOnly": true
+}

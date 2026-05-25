@@ -1,0 +1,86 @@
+.poe2db-link-icon {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  vertical-align: middle;
+  margin-right: 3px;
+  position: relative;
+  top: -1px;
+}
+
+.poe2db-tooltip {
+  position: fixed;
+  z-index: 9999;
+  width: 320px;
+  background: #1a1209;
+  border: 1px solid #8b6914;
+  border-radius: 4px;
+  padding: 12px 14px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.75);
+  pointer-events: none;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #c8b89a;
+}
+
+.poe2db-loading {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.poe2db-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: #af8c3e;
+  margin-bottom: 6px;
+  letter-spacing: 0.02em;
+}
+
+.poe2db-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 9px;
+}
+
+.poe2db-tag {
+  background: rgba(139, 105, 20, 0.18);
+  border: 1px solid rgba(139, 105, 20, 0.5);
+  border-radius: 3px;
+  padding: 1px 7px;
+  font-size: 11px;
+  color: #c9a84c;
+  letter-spacing: 0.03em;
+}
+
+.poe2db-desc {
+  color: #b8a888;
+  margin-bottom: 10px;
+  font-style: italic;
+  border-left: 2px solid rgba(139, 105, 20, 0.4);
+  padding-left: 8px;
+}
+
+.poe2db-stats {
+  border-top: 1px solid rgba(139, 105, 20, 0.3);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.poe2db-stat-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.poe2db-stat-label {
+  color: #8a7a5a;
+}
+
+.poe2db-stat-value {
+  color: #c8b89a;
+  font-weight: 500;
+  text-align: right;
+}
