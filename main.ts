@@ -13,19 +13,40 @@ interface GemData {
   iconUrl: string;
 }
 
+interface CacheEntry {
+  data: GemData;
+  fetchedAt: number;
+}
+
+interface PersistedCache {
+  [url: string]: CacheEntry;
+}
+
+interface PrefetchItem {
+  url: string;
+  link: HTMLAnchorElement;
+}
+
 const WIKI_HOST = 'poe2wiki.net';
 const WIKI_BASE = 'https://www.poe2wiki.net';
-// requestUrl in Obsidian desktop doesn't send a browser UA by default; wiki returns 403 without one
 const BROWSER_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const PREFETCH_DELAY_MS = 150;
 
+// Session-level memory cache; populated from disk on load
 const gemCache = new Map<string, GemData | null>();
 
-export default class Poe2dbTooltipPlugin extends Plugin {
+export default class Poe2WikiTooltipPlugin extends Plugin {
   private tooltip: HTMLElement;
   private hoverTimer: number | null = null;
   private hideTimer: number | null = null;
+  private inflight = new Map<string, Promise<GemData | null>>();
+  private prefetchQueue: PrefetchItem[] = [];
+  private queueRunning = false;
 
   async onload() {
+    await this.loadPersistedCache();
+
     this.tooltip = document.body.createDiv({ cls: 'poe2db-tooltip' });
     this.tooltip.style.display = 'none';
 
@@ -33,7 +54,7 @@ export default class Poe2dbTooltipPlugin extends Plugin {
       el.querySelectorAll<HTMLAnchorElement>(`a[href*="${WIKI_HOST}"]`).forEach(link => {
         link.addEventListener('mouseenter', (evt) => this.onLinkEnter(evt, link));
         link.addEventListener('mouseleave', () => this.onLinkLeave());
-        this.injectLinkIcon(link);
+        this.enqueuePrefetch(link);
       });
     });
   }
@@ -42,10 +63,85 @@ export default class Poe2dbTooltipPlugin extends Plugin {
     this.tooltip.remove();
   }
 
+  // --- Cache ---
+
+  private async loadPersistedCache() {
+    const saved: PersistedCache = (await this.loadData()) ?? {};
+    const now = Date.now();
+    for (const [url, entry] of Object.entries(saved)) {
+      if (now - entry.fetchedAt < CACHE_TTL_MS) {
+        gemCache.set(url, entry.data);
+      }
+    }
+  }
+
+  private async persistCache() {
+    const out: PersistedCache = {};
+    const now = Date.now();
+    for (const [url, data] of gemCache.entries()) {
+      if (data !== null) out[url] = { data, fetchedAt: now };
+    }
+    await this.saveData(out);
+  }
+
+  // --- Prefetch queue ---
+
+  private enqueuePrefetch(link: HTMLAnchorElement) {
+    const url = link.href;
+    if (gemCache.has(url)) {
+      this.injectLinkIcon(link);
+      return;
+    }
+    this.prefetchQueue.push({ url, link });
+    this.runQueue();
+  }
+
+  private async runQueue() {
+    if (this.queueRunning) return;
+    this.queueRunning = true;
+    while (this.prefetchQueue.length > 0) {
+      const item = this.prefetchQueue.shift()!;
+      // Skip if another prefetch already populated the cache for this URL
+      if (!gemCache.has(item.url)) {
+        await this.getGemData(item.url);
+      }
+      this.injectLinkIcon(item.link);
+      if (this.prefetchQueue.length > 0) {
+        await sleep(PREFETCH_DELAY_MS);
+      }
+    }
+    this.queueRunning = false;
+  }
+
+  // --- Fetch ---
+
+  private async getGemData(url: string): Promise<GemData | null> {
+    if (gemCache.has(url)) return gemCache.get(url) ?? null;
+    if (this.inflight.has(url)) return this.inflight.get(url)!;
+
+    const promise = requestUrl({ url, headers: { 'User-Agent': BROWSER_UA } })
+      .then(r => {
+        const data = parseWikiPage(r.text);
+        gemCache.set(url, data);
+        this.persistCache();
+        return data;
+      })
+      .catch(e => {
+        console.error('[poe2-wiki-tooltips] fetch failed:', e);
+        gemCache.set(url, null);
+        return null;
+      })
+      .finally(() => this.inflight.delete(url));
+
+    this.inflight.set(url, promise);
+    return promise;
+  }
+
+  // --- Icon injection ---
+
   private async injectLinkIcon(link: HTMLAnchorElement) {
     const data = await this.getGemData(link.href);
     if (!data?.iconUrl) return;
-    // Don't double-inject if post-processor runs again on the same element
     if (link.querySelector('.poe2db-link-icon')) return;
     const img = createEl('img', {
       cls: 'poe2db-link-icon',
@@ -54,13 +150,14 @@ export default class Poe2dbTooltipPlugin extends Plugin {
     link.prepend(img);
   }
 
+  // --- Hover ---
+
   private onLinkEnter(evt: MouseEvent, link: HTMLAnchorElement) {
     if (this.hideTimer !== null) {
       clearTimeout(this.hideTimer);
       this.hideTimer = null;
     }
 
-    // If already cached, render immediately with no loading flash
     if (gemCache.has(link.href)) {
       const data = gemCache.get(link.href);
       if (data) this.renderTooltip(data, link);
@@ -141,40 +238,25 @@ export default class Poe2dbTooltipPlugin extends Plugin {
     this.tooltip.style.left = `${Math.max(gap, left)}px`;
     this.tooltip.style.top = `${Math.max(gap, top)}px`;
   }
-
-  private async getGemData(poe2dbUrl: string): Promise<GemData | null> {
-    if (gemCache.has(poe2dbUrl)) return gemCache.get(poe2dbUrl) ?? null;
-
-    try {
-      const response = await requestUrl({ url: poe2dbUrl, headers: { 'User-Agent': BROWSER_UA } });
-      const data = parseWikiPage(response.text);
-      gemCache.set(poe2dbUrl, data);
-      return data;
-    } catch (e) {
-      console.error('[poe2db-tooltips] wiki fetch failed:', e);
-      gemCache.set(poe2dbUrl, null);
-      return null;
-    }
-  }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function parseWikiPage(html: string): GemData | null {
   const doc = new DOMParser().parseFromString(html, 'text/html');
 
-  // The gem infobox is a span/div with class "item-box -gem"
   const itemBox = doc.querySelector('.item-box.-gem');
   if (!itemBox) return null;
 
   const name = itemBox.querySelector('.header.-single')?.textContent?.trim() ?? '';
 
-  // Tags: links inside the first .group that point to gem tag pages
   const firstGroup = itemBox.querySelector('.item-stats > .group');
   const tags = Array.from(firstGroup?.querySelectorAll('a') ?? [])
     .map(a => a.textContent?.trim() ?? '')
     .filter(Boolean);
 
-  // Stats: the first group has lines like "Cost: (9-95) Mana" separated by <br>
   const stats: GemStat[] = [];
   if (firstGroup) {
     const tmp = doc.createElement('span');
