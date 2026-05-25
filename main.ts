@@ -24,6 +24,7 @@ interface GemData {
     int?: AttrRange;
     dex?: AttrRange;
   };
+  modifiers?: string[];
 }
 
 interface CacheEntry {
@@ -68,7 +69,24 @@ const WIKI_HOST = 'poe2wiki.net';
 const WIKI_BASE = 'https://www.poe2wiki.net';
 const BROWSER_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 // Increment when GemData shape changes — clears stale cache automatically
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 6;
+
+const ROMAN = ['I', 'II', 'III', 'IV', 'V'];
+const ROMAN_RE = /^(.+?)\s+(I{1,3}|IV|V)$/;
+const TIERED_URL_RE = /\/wiki\/(.+?)_(I{1,3}|IV|V)(?:[?#].*)?$/;
+
+function getParentUrl(url: string): string | null {
+  const m = url.match(TIERED_URL_RE);
+  if (!m) return null;
+  return `${WIKI_BASE}/wiki/${m[1]}`;
+}
+
+function getAllTierUrls(name: string): { roman: string; url: string }[] {
+  const m = name.match(ROMAN_RE);
+  if (!m) return [];
+  const base = m[1].replace(/ /g, '_');
+  return ROMAN.map(r => ({ roman: r, url: `${WIKI_BASE}/wiki/${base}_${r}` }));
+}
 
 // Session-level memory cache; populated from disk on load
 const gemCache = new Map<string, GemData | null>();
@@ -78,6 +96,7 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
   private tooltip: HTMLElement;
   private hoverTimer: number | null = null;
   private hideTimer: number | null = null;
+  private currentAnchor: HTMLAnchorElement | null = null;
   private inflight = new Map<string, Promise<GemData | null>>();
   private prefetchQueue: PrefetchItem[] = [];
   private queueRunning = false;
@@ -90,10 +109,22 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
     this.tooltip = document.body.createDiv({ cls: 'poe2db-tooltip' });
     this.tooltip.style.display = 'none';
 
+    this.tooltip.addEventListener('mouseenter', () => {
+      if (this.hideTimer !== null) {
+        clearTimeout(this.hideTimer);
+        this.hideTimer = null;
+      }
+    });
+    this.tooltip.addEventListener('mouseleave', (evt) => {
+      if ((evt as MouseEvent).relatedTarget !== this.currentAnchor) {
+        this.hideTimer = window.setTimeout(() => this.hideTooltip(), 100);
+      }
+    });
+
     this.registerMarkdownPostProcessor((el) => {
       el.querySelectorAll<HTMLAnchorElement>(`a[href*="${WIKI_HOST}"]`).forEach(link => {
         link.addEventListener('mouseenter', (evt) => this.onLinkEnter(evt, link));
-        link.addEventListener('mouseleave', () => this.onLinkLeave());
+        link.addEventListener('mouseleave', (evt) => this.onLinkLeave(evt));
         this.enqueuePrefetch(link);
       });
     });
@@ -180,6 +211,55 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
 
   private async getGemData(url: string): Promise<GemData | null> {
     if (gemCache.has(url)) return gemCache.get(url) ?? null;
+
+    const parentUrl = getParentUrl(url);
+    if (parentUrl) {
+      if (this.inflight.has(parentUrl)) {
+        await this.inflight.get(parentUrl);
+        return gemCache.get(url) ?? null;
+      }
+
+      const promise = requestUrl({ url: parentUrl, headers: { 'User-Agent': BROWSER_UA } })
+        .then(async r => {
+          parseWikiPage(r.text, parentUrl);
+          this.savePluginData();
+          
+          if (!gemCache.has(url)) {
+            // Parent page did not contain this tiered gem (e.g. Rage or Bleed resource pages).
+            // Fallback to fetching the specific tiered gem page directly!
+            try {
+              const r2 = await requestUrl({ url, headers: { 'User-Agent': BROWSER_UA } });
+              const data = parseWikiPage(r2.text);
+              gemCache.set(url, data);
+              this.savePluginData();
+            } catch (e2) {
+              console.error('[poe2-wiki-tooltips] fallback fetch failed for:', url, e2);
+              gemCache.set(url, null);
+            }
+          }
+          return gemCache.get(url) ?? null;
+        })
+        .catch(async e => {
+          console.error('[poe2-wiki-tooltips] fetch parent failed for:', parentUrl, e);
+          // Fallback to fetching the specific tiered gem page directly!
+          try {
+            const r2 = await requestUrl({ url, headers: { 'User-Agent': BROWSER_UA } });
+            const data = parseWikiPage(r2.text);
+            gemCache.set(url, data);
+            this.savePluginData();
+            return data;
+          } catch (e2) {
+            console.error('[poe2-wiki-tooltips] fallback fetch failed for:', url, e2);
+            gemCache.set(url, null);
+            return null;
+          }
+        })
+        .finally(() => this.inflight.delete(parentUrl));
+
+      this.inflight.set(parentUrl, promise);
+      return promise;
+    }
+
     if (this.inflight.has(url)) return this.inflight.get(url)!;
 
     const promise = requestUrl({ url, headers: { 'User-Agent': BROWSER_UA } })
@@ -187,10 +267,11 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
         const data = parseWikiPage(r.text);
         gemCache.set(url, data);
         this.savePluginData();
+        if (data) this.prefetchSiblingTiers(data.name, url);
         return data;
       })
       .catch(e => {
-        console.error('[poe2-wiki-tooltips] fetch failed:', e);
+        console.error('[poe2-wiki-tooltips] fetch failed for:', url, e);
         gemCache.set(url, null);
         return null;
       })
@@ -198,6 +279,14 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
 
     this.inflight.set(url, promise);
     return promise;
+  }
+
+  private prefetchSiblingTiers(name: string, currentUrl: string) {
+    for (const { url } of getAllTierUrls(name)) {
+      if (url !== currentUrl && !gemCache.has(url) && !this.inflight.has(url)) {
+        this.getGemData(url);
+      }
+    }
   }
 
   // --- Icon injection ---
@@ -216,6 +305,7 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
   // --- Hover ---
 
   private onLinkEnter(evt: MouseEvent, link: HTMLAnchorElement) {
+    this.currentAnchor = link;
     if (this.hideTimer !== null) {
       clearTimeout(this.hideTimer);
       this.hideTimer = null;
@@ -223,7 +313,10 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
 
     if (gemCache.has(link.href)) {
       const data = gemCache.get(link.href);
-      if (data) this.renderTooltip(data, link);
+      if (data) {
+        this.renderTooltip(data, link);
+        this.prefetchSiblingTiers(data.name, link.href);
+      }
       return;
     }
 
@@ -236,11 +329,13 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
     }, 250);
   }
 
-  private onLinkLeave() {
+  private onLinkLeave(evt: MouseEvent) {
     if (this.hoverTimer !== null) {
       clearTimeout(this.hoverTimer);
       this.hoverTimer = null;
     }
+    if ((evt.relatedTarget as Node | null) === this.tooltip ||
+        this.tooltip.contains(evt.relatedTarget as Node | null)) return;
     this.hideTimer = window.setTimeout(() => this.hideTooltip(), 100);
   }
 
@@ -259,14 +354,35 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
   private renderTooltip(data: GemData, anchor: HTMLAnchorElement) {
     this.tooltip.empty();
 
-    // Header: icon + name
+    // Header: icon + name + tier switcher
     const header = this.tooltip.createDiv({ cls: 'poe2db-header' });
     if (data.iconUrl) {
-      const img = header.createEl('img', { cls: 'poe2db-icon', attr: { src: data.iconUrl } });
-      img.width = 36;
-      img.height = 36;
+      header.createEl('img', { cls: 'poe2db-icon', attr: { src: data.iconUrl, width: '18', height: '18' } });
     }
-    header.createDiv({ text: data.name, cls: 'poe2db-name' });
+    header.createSpan({ text: data.name, cls: 'poe2db-name' });
+
+    const m = data.name.match(ROMAN_RE);
+    const activeRoman = m ? m[2] : '';
+
+    const tiers = getAllTierUrls(data.name);
+    if (tiers.length > 0) {
+      const switcher = header.createDiv({ cls: 'poe2db-tier-switcher' });
+      for (const { roman, url } of tiers) {
+        const cached = gemCache.get(url);
+        if (cached === undefined || cached === null) continue; // skip if not cached or doesn't exist
+        const isActive = roman === activeRoman;
+        const btn = switcher.createEl('button', {
+          text: roman,
+          cls: ['poe2db-tier-btn', ...(isActive ? ['poe2db-tier-btn--active'] : [])],
+        });
+        if (!isActive) {
+          btn.addEventListener('click', () => {
+            this.currentAnchor = anchor;
+            this.renderTooltip(cached, anchor);
+          });
+        }
+      }
+    }
 
     // Tags
     if (data.tags.length > 0) {
@@ -290,9 +406,9 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
       }
 
       const { str, int, dex } = data.attributes;
-      if (str) meta.createSpan({ text: `Str: ${str.min}–${str.max}`, cls: 'poe2db-attr-str' });
-      if (int) meta.createSpan({ text: `Int: ${int.min}–${int.max}`, cls: 'poe2db-attr-int' });
-      if (dex) meta.createSpan({ text: `Dex: ${dex.min}–${dex.max}`, cls: 'poe2db-attr-dex' });
+      if (str) meta.createSpan({ text: `Str: ${str.min === str.max ? str.min : `${str.min}–${str.max}`}`, cls: 'poe2db-attr-str' });
+      if (int) meta.createSpan({ text: `Int: ${int.min === int.max ? int.min : `${int.min}–${int.max}`}`, cls: 'poe2db-attr-int' });
+      if (dex) meta.createSpan({ text: `Dex: ${dex.min === dex.max ? dex.min : `${dex.min}–${dex.max}`}`, cls: 'poe2db-attr-dex' });
     }
 
     // Description
@@ -310,19 +426,38 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
       });
     }
 
+    // Modifiers / Effects (magic stats in blue)
+    if (data.modifiers && data.modifiers.length > 0) {
+      const modsEl = this.tooltip.createDiv({ cls: 'poe2db-mods' });
+      data.modifiers.forEach(mod => {
+        modsEl.createDiv({ text: mod, cls: 'poe2db-mod-row' });
+      });
+    }
+
     this.positionTooltip(anchor);
     this.tooltip.style.display = 'block';
   }
 
   private positionTooltip(anchor: HTMLAnchorElement) {
     const rect = anchor.getBoundingClientRect();
-    const tooltipWidth = 320;
+    const tooltipWidth = 400;
     const gap = 8;
+
+    // Temporarily show display: 'block' to measure the exact rendered height in the DOM
+    this.tooltip.style.display = 'block';
+    const tooltipHeight = this.tooltip.offsetHeight;
+
     let left = rect.left;
     let top = rect.bottom + gap;
-    if (left + tooltipWidth > window.innerWidth - gap) left = window.innerWidth - tooltipWidth - gap;
-    const estimatedHeight = 260;
-    if (top + estimatedHeight > window.innerHeight) top = rect.top - estimatedHeight - gap;
+
+    if (left + tooltipWidth > window.innerWidth - gap) {
+      left = window.innerWidth - tooltipWidth - gap;
+    }
+
+    if (top + tooltipHeight > window.innerHeight) {
+      top = rect.top - tooltipHeight - gap;
+    }
+
     this.tooltip.style.left = `${Math.max(gap, left)}px`;
     this.tooltip.style.top = `${Math.max(gap, top)}px`;
   }
@@ -475,12 +610,7 @@ function parseProgressionTable(doc: Document): {
   };
 }
 
-function parseWikiPage(html: string): GemData | null {
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-
-  const itemBox = doc.querySelector('.item-box.-gem');
-  if (!itemBox) return null;
-
+function parseGemElement(doc: Document, itemBox: Element, container?: Element): GemData | null {
   const name = itemBox.querySelector('.header.-single')?.textContent?.trim() ?? '';
 
   const firstGroup = itemBox.querySelector('.item-stats > .group');
@@ -490,12 +620,14 @@ function parseWikiPage(html: string): GemData | null {
 
   const isSupport = tags.includes('Support') || tags.includes('Spirit');
 
-  // Parse stat lines from first group
+  // Parse stat lines from all non-special groups
   let tier: number | null = null;
   const stats: GemStat[] = [];
-  if (firstGroup) {
+  const attributes: { str?: AttrRange; int?: AttrRange; dex?: AttrRange } = {};
+
+  itemBox.querySelectorAll('.item-stats > .group:not(.tc.-gemdesc):not(.tc.-mod):not(.tc.-help)').forEach(group => {
     const tmp = doc.createElement('span');
-    firstGroup.innerHTML.split(/<br\s*\/?>/i).forEach(line => {
+    group.innerHTML.split(/<br\s*\/?>/i).forEach(line => {
       tmp.innerHTML = line;
       const text = tmp.textContent?.trim() ?? '';
       const colon = text.indexOf(':');
@@ -507,20 +639,93 @@ function parseWikiPage(html: string): GemData | null {
         tier = parseInt(value) || null;
       } else if (label === 'Level') {
         // skip — gem level range, not useful in tooltip
+      } else if (label === 'Support Requirements') {
+        // e.g. "+5 Dex", "+5 Str, +5 Dex", etc.
+        const reqs = value.split(',');
+        reqs.forEach(req => {
+          const match = req.trim().match(/^\+(\d+)\s+(Str|Dex|Int)$/i);
+          if (match) {
+            const val = parseInt(match[1]);
+            const attr = match[2].toLowerCase() as 'str' | 'dex' | 'int';
+            attributes[attr] = { min: val, max: val };
+          }
+        });
       } else {
         stats.push({ label, value });
       }
     });
-  }
+  });
 
   const description = itemBox.querySelector('.tc.-gemdesc')?.textContent?.trim() ?? '';
 
-  const iconSrc = itemBox.querySelector('img')?.getAttribute('src') ?? '';
+  // Parse modifier lines (magic support gem effects) from .group.tc.-mod
+  const modifiers: string[] = [];
+  itemBox.querySelectorAll('.group.tc.-mod').forEach(group => {
+    const tmp = doc.createElement('span');
+    group.innerHTML.split(/<br\s*\/?>/i).forEach(line => {
+      tmp.innerHTML = line;
+      const text = tmp.textContent?.trim();
+      if (text) modifiers.push(text);
+    });
+  });
+
+  // Try to find the high-quality item icon first, then fall back to generic image
+  const imgEl = (container ?? itemBox).querySelector('.item-icon img') ?? (container ?? itemBox).querySelector('img');
+  const iconSrc = imgEl?.getAttribute('src') ?? '';
   const iconUrl = iconSrc ? WIKI_BASE + iconSrc : '';
 
-  const { requiresLevel, attributes } = isSupport
+  const { requiresLevel, attributes: progAttributes } = isSupport
     ? { requiresLevel: 0, attributes: {} }
     : parseProgressionTable(doc);
 
-  return { name, tags, description, stats, iconUrl, tier, isSupport, requiresLevel, attributes };
+  const finalAttributes = Object.assign({}, progAttributes, attributes);
+
+  return {
+    name,
+    tags,
+    description,
+    stats,
+    iconUrl,
+    tier,
+    isSupport,
+    requiresLevel,
+    attributes: finalAttributes,
+    modifiers,
+  };
+}
+
+function parseWikiPage(html: string, pageUrl?: string): GemData | null {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+
+  // If there is a top-level main gem infobox (not inside a hoverbox), parse it as a single page!
+  const mainItemBox = doc.querySelector('.item-box.-gem:not(.hoverbox *):not(.c-item-hoverbox *)');
+  if (mainItemBox) {
+    return parseGemElement(doc, mainItemBox, mainItemBox.parentElement ?? doc.body);
+  }
+
+  // Otherwise, check if this is a parent/disambiguation page containing multiple hoverboxes
+  const hoverboxes = doc.querySelectorAll('.hoverbox, .c-item-hoverbox');
+  if (hoverboxes.length > 0) {
+    let targetData: GemData | null = null;
+    hoverboxes.forEach(box => {
+      const link = box.querySelector('.hoverbox__activator a, .c-item-hoverbox__activator a');
+      const href = link?.getAttribute('href');
+      if (!href) return;
+      
+      const fullUrl = WIKI_BASE + href;
+      const itemBox = box.querySelector('.item-box.-gem');
+      if (itemBox) {
+        const data = parseGemElement(doc, itemBox, box);
+        if (data) {
+          gemCache.set(fullUrl, data);
+          if (fullUrl === pageUrl) {
+            targetData = data;
+          }
+        }
+      }
+    });
+    return targetData;
+  }
+
+  return null;
 }
