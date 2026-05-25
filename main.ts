@@ -440,7 +440,7 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
 
   private positionTooltip(anchor: HTMLAnchorElement) {
     const rect = anchor.getBoundingClientRect();
-    const tooltipWidth = 320;
+    const tooltipWidth = 400;
     const gap = 8;
     let left = rect.left;
     let top = rect.bottom + gap;
