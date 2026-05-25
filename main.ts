@@ -5,12 +5,25 @@ interface GemStat {
   value: string;
 }
 
+interface AttrRange {
+  min: number;
+  max: number;
+}
+
 interface GemData {
   name: string;
   tags: string[];
   description: string;
   stats: GemStat[];
   iconUrl: string;
+  tier: number | null;
+  isSupport: boolean;
+  requiresLevel: number;
+  attributes: {
+    str?: AttrRange;
+    int?: AttrRange;
+    dex?: AttrRange;
+  };
 }
 
 interface CacheEntry {
@@ -37,6 +50,7 @@ interface PluginSettings {
 }
 
 interface PluginData {
+  cacheVersion?: number;
   settings: PluginSettings;
   cache: PersistedCache;
 }
@@ -53,6 +67,8 @@ const DEFAULT_SETTINGS: PluginSettings = {
 const WIKI_HOST = 'poe2wiki.net';
 const WIKI_BASE = 'https://www.poe2wiki.net';
 const BROWSER_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+// Increment when GemData shape changes — clears stale cache automatically
+const CACHE_VERSION = 2;
 
 // Session-level memory cache; populated from disk on load
 const gemCache = new Map<string, GemData | null>();
@@ -101,9 +117,11 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
   // --- Data persistence ---
 
   async loadPluginData() {
-    const data: PluginData = (await this.loadData()) ?? { settings: DEFAULT_SETTINGS, cache: {} };
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, data.settings);
-    this.loadCacheEntries(data.cache ?? {});
+    const raw: PluginData = (await this.loadData()) ?? { settings: DEFAULT_SETTINGS, cache: {} };
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, raw.settings);
+    // Discard cache if shape has changed
+    const cache = raw.cacheVersion === CACHE_VERSION ? (raw.cache ?? {}) : {};
+    this.loadCacheEntries(cache);
   }
 
   private loadCacheEntries(cache: PersistedCache) {
@@ -122,7 +140,7 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
     for (const [url, data] of gemCache.entries()) {
       if (data !== null) cache[url] = { data, fetchedAt: now };
     }
-    await this.saveData({ settings: this.settings, cache });
+    await this.saveData({ cacheVersion: CACHE_VERSION, settings: this.settings, cache });
   }
 
   clearCache() {
@@ -241,6 +259,7 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
   private renderTooltip(data: GemData, anchor: HTMLAnchorElement) {
     this.tooltip.empty();
 
+    // Header: icon + name
     const header = this.tooltip.createDiv({ cls: 'poe2db-header' });
     if (data.iconUrl) {
       const img = header.createEl('img', { cls: 'poe2db-icon', attr: { src: data.iconUrl } });
@@ -249,15 +268,39 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
     }
     header.createDiv({ text: data.name, cls: 'poe2db-name' });
 
+    // Tags
     if (data.tags.length > 0) {
       const tagsEl = this.tooltip.createDiv({ cls: 'poe2db-tags' });
       data.tags.forEach(tag => tagsEl.createSpan({ text: tag, cls: 'poe2db-tag' }));
     }
 
+    // Gem meta: tier, requires level, attributes
+    const hasMeta = data.tier !== null || data.requiresLevel > 0 ||
+      data.attributes.str || data.attributes.int || data.attributes.dex;
+    if (hasMeta) {
+      const meta = this.tooltip.createDiv({ cls: 'poe2db-gem-meta' });
+
+      if (data.tier !== null) {
+        const gemType = data.isSupport ? 'Support' : 'Skill';
+        meta.createSpan({ text: `Tier ${data.tier} Uncut ${gemType} Gem`, cls: 'poe2db-tier' });
+      }
+
+      if (data.requiresLevel > 0) {
+        meta.createSpan({ text: `Requires Level ${data.requiresLevel}`, cls: 'poe2db-req-level' });
+      }
+
+      const { str, int, dex } = data.attributes;
+      if (str) meta.createSpan({ text: `Str: ${str.min}–${str.max}`, cls: 'poe2db-attr-str' });
+      if (int) meta.createSpan({ text: `Int: ${int.min}–${int.max}`, cls: 'poe2db-attr-int' });
+      if (dex) meta.createSpan({ text: `Dex: ${dex.min}–${dex.max}`, cls: 'poe2db-attr-dex' });
+    }
+
+    // Description
     if (data.description) {
       this.tooltip.createDiv({ text: data.description, cls: 'poe2db-desc' });
     }
 
+    // Stats
     if (data.stats.length > 0) {
       const statsEl = this.tooltip.createDiv({ cls: 'poe2db-stats' });
       data.stats.forEach(({ label, value }) => {
@@ -278,7 +321,7 @@ export default class Poe2WikiTooltipPlugin extends Plugin {
     let left = rect.left;
     let top = rect.bottom + gap;
     if (left + tooltipWidth > window.innerWidth - gap) left = window.innerWidth - tooltipWidth - gap;
-    const estimatedHeight = 220;
+    const estimatedHeight = 260;
     if (top + estimatedHeight > window.innerHeight) top = rect.top - estimatedHeight - gap;
     this.tooltip.style.left = `${Math.max(gap, left)}px`;
     this.tooltip.style.top = `${Math.max(gap, top)}px`;
@@ -385,6 +428,52 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function parseProgressionTable(doc: Document): {
+  requiresLevel: number;
+  attributes: { str?: AttrRange; int?: AttrRange; dex?: AttrRange };
+} {
+  const table = doc.querySelector('table.skill-progression-table');
+  if (!table) return { requiresLevel: 0, attributes: {} };
+
+  const headers: string[] = [];
+  table.querySelectorAll('tr:first-child th').forEach(th => {
+    const title = th.querySelector('abbr')?.getAttribute('title') ?? th.textContent?.trim() ?? '';
+    headers.push(title.toLowerCase());
+  });
+
+  const rows = Array.from(table.querySelectorAll('tbody tr'));
+  if (rows.length === 0) return { requiresLevel: 0, attributes: {} };
+
+  const getCells = (row: Element) =>
+    Array.from(row.querySelectorAll('td')).map(td => td.textContent?.trim() ?? '');
+
+  const firstRow = getCells(rows[0]);
+  const lastRow = getCells(rows[rows.length - 1]);
+
+  const colIdx = (term: string) => headers.findIndex(h => h.includes(term));
+  const num = (val: string) => parseInt(val.replace(/[^\d]/g, '')) || 0;
+
+  const attrRange = (idx: number): AttrRange | undefined => {
+    if (idx < 0) return undefined;
+    const min = num(firstRow[idx]);
+    const max = num(lastRow[idx]);
+    if (max === 0) return undefined;
+    return { min, max };
+  };
+
+  const reqLevelIdx = colIdx('required level');
+  const requiresLevel = reqLevelIdx >= 0 ? num(firstRow[reqLevelIdx]) : 0;
+
+  return {
+    requiresLevel,
+    attributes: {
+      str: attrRange(colIdx('strength')),
+      int: attrRange(colIdx('intelligence')),
+      dex: attrRange(colIdx('dexterity')),
+    },
+  };
+}
+
 function parseWikiPage(html: string): GemData | null {
   const doc = new DOMParser().parseFromString(html, 'text/html');
 
@@ -398,6 +487,10 @@ function parseWikiPage(html: string): GemData | null {
     .map(a => a.textContent?.trim() ?? '')
     .filter(Boolean);
 
+  const isSupport = tags.includes('Support') || tags.includes('Spirit');
+
+  // Parse stat lines from first group
+  let tier: number | null = null;
   const stats: GemStat[] = [];
   if (firstGroup) {
     const tmp = doc.createElement('span');
@@ -408,7 +501,12 @@ function parseWikiPage(html: string): GemData | null {
       if (colon === -1) return;
       const label = text.slice(0, colon).trim();
       const value = text.slice(colon + 1).trim();
-      if (label && value && label !== 'Tier' && label !== 'Level') {
+      if (!label || !value) return;
+      if (label === 'Tier') {
+        tier = parseInt(value) || null;
+      } else if (label === 'Level') {
+        // skip — gem level range, not useful in tooltip
+      } else {
         stats.push({ label, value });
       }
     });
@@ -419,5 +517,9 @@ function parseWikiPage(html: string): GemData | null {
   const iconSrc = itemBox.querySelector('img')?.getAttribute('src') ?? '';
   const iconUrl = iconSrc ? WIKI_BASE + iconSrc : '';
 
-  return { name, tags, description, stats, iconUrl };
+  const { requiresLevel, attributes } = isSupport
+    ? { requiresLevel: 0, attributes: {} }
+    : parseProgressionTable(doc);
+
+  return { name, tags, description, stats, iconUrl, tier, isSupport, requiresLevel, attributes };
 }
